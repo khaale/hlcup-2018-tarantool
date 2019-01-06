@@ -1,6 +1,6 @@
 FROM tarantool/tarantool:2
 
-COPY app.lua /opt/tarantool/app.lua
+COPY src/ /opt/tarantool/
 
 EXPOSE 80
 
