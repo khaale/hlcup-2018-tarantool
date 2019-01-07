@@ -44,6 +44,9 @@ local function get_key(self, name, value)
     return self._lookups[name][value]
 end
 
+local function get_lookup(self, name)
+    return self._lookups[name]
+end
 
 local refdata = {}
 refdata.new = function()
@@ -59,9 +62,11 @@ refdata.new = function()
     dicts['status']['всё сложно'] = 3
     dicts['country'] = {}
     dicts['city'] = {}
+    dicts['interest'] = {}
     local dict_counters = {}
     dict_counters['country'] = 1
     dict_counters['city'] = 1
+    dict_counters['interest'] = 1
 
     self._dicts = dicts
     self._dict_counters = dict_counters
@@ -71,6 +76,7 @@ refdata.new = function()
     self.get_or_add_value = get_or_add_value
     self.build_lookups = build_lookups
     self.get_key = get_key
+    self.get_lookup = get_lookup
 
     return self
 end

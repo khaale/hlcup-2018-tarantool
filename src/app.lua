@@ -6,6 +6,8 @@ local json = require('json')
 local box = require('box')
 local msgpack = require('msgpack')
 local fiber = require('fiber')
+--local bit32 = require('bit32')
+--local digest = require('digest')
 
 local refdata = require('refdata')
 local refs = refdata.new()
@@ -63,8 +65,18 @@ for _, account_file in ipairs(account_files) do
             premium_finish = tonumber(account_js['premium']['finish'])
             if (current_time > premium_start and current_time < premium_finish) then premium_now = 1 end
         end
-
-        local record = {
+        local likes = {}
+        local likes_mask = 0
+        --[[
+        if (account_js['likes'] ~= nil) then
+            for _,like in ipairs(account_js['likes']) do
+                local hash = tonumber(digest.murmur(tostring(like['id'])))
+                likes_mask = bit32.bor(likes_mask, hash)
+                table.insert(likes, hash)-- {like['id'], like['ts']})
+            end
+        end
+        ]]
+        local account = {
             tonumber(account_js['id']),
             account_js['email'],
             extract_email_domain(account_js['email']),
@@ -81,29 +93,45 @@ for _, account_file in ipairs(account_files) do
             refs:get_value('status', account_js['status']),
             premium_start,
             premium_finish,
-            premium_now
+            premium_now,
+            likes,
+            likes_mask
         }
+
         --log.info(record)
-        box.space.accounts:insert(record)
+        box.space.accounts:insert(account)
+
+        if (account_js['interests'] ~= nil) then
+            for _,interest in ipairs(account_js['interests']) do
+                local interest_id = refs:get_or_add_value('interest', interest)
+                box.space.interests:insert({ account[1], interest_id })
+            end
+        end
+
+        if (account_js['likes'] ~= nil) then
+            for _,like in ipairs(account_js['likes']) do
+                box.space.likes:upsert(
+                    {account[1], like['id']},
+                    {{'=', 2, like['id']}}
+                )
+            end
+        end
     end
 end
 
-local cnt = box.space.accounts:count()
-log.info('Records inserted '..tostring(cnt))
-log.info('Sample:')
-log.info(box.space.accounts.index.primary:random())
+db.print_stats(box, log)
 
 log.info('Memory before and after GC: ')
 log.info(box.info.memory())
 collectgarbage('collect')
 log.info(box.info.memory())
 
-db.print_stats(box, log)
+-- make snapshot for debug purposes
+-- box.snapshot()
 
 refs:build_lookups()
 
 local function dummy_accounts_handler(req)
-    log.info(req:query_param(nil))
     local resp = req:render({text = '{"accounts": []}' })
     resp.status = 200
     return resp
@@ -142,14 +170,14 @@ httpd:route({ path = '/accounts/:id/suggest', method = 'GET' }, dummy_accounts_h
 httpd:route({ path = '/accounts/:id', method = 'POST' }, dummy_empty_handler)
 
 local function warmup_http()
-    fiber.sleep(1000)
-    log.info("Warming up..")
+    fiber.sleep(1)
+    --log.info("Warming up..")
     local http_client = require('http.client').new({max_connections = 5})
     local resp = http_client:request('GET','http://0.0.0.0/accounts/filter/?limit=5')
     log.info(resp)
 end
 
---fiber.create(warmup_http)
+fiber.create(warmup_http)
 
 log.info('Starting http server..')
 httpd:start()

@@ -6,7 +6,7 @@ services:
      - "3301:3301"
      - "8080:80"
     volumes: 
-     #- "./data:/var/lib/tarantool"
+      #- "./data:/var/lib/tarantool"
       - "./input/data.zip:/tmp/data/data.zip"
     #command: 
     #  - tarantool
