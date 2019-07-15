@@ -7,7 +7,7 @@ services:
      - "8080:80"
     volumes: 
       #- "./data:/var/lib/tarantool"
-      - "./input/data.zip:/tmp/data/data.zip"
+      - "./input:/tmp/data"
     #command: 
     #  - tarantool
     #  - app.lua 

@@ -1,6 +1,7 @@
 local function configure(box, log)
     box.cfg{
-        memtx_dir = '/var/lib/tarantool'
+        memtx_dir = '/var/lib/tarantool',
+        wal_mode = 'none'
     }
     box.once('init', function()
         local accounts_schema = box.schema.create_space('accounts')
@@ -52,8 +53,21 @@ local function configure(box, log)
             { name = 'liker_id', type = 'unsigned'},
             { name = 'likee_id', type = 'unsigned'}
         })
-        like_schema:create_index('primary',  { type = 'hash', parts = { 'liker_id', 'likee_id' } })
+        like_schema:create_index('primary',  { type = 'tree', parts = { 'liker_id', 'likee_id' } })
         like_schema:create_index('snd_likee_id',  { type = 'tree', parts = { 'likee_id' }, unique = false })
+
+        --"country", "city", "sex", "status", "premium_now"
+        local lowcard_schema = box.schema.create_space('lowcard')
+        lowcard_schema:format({
+            { name = 'id', type = 'unsigned' },
+            { name = 'country', type = 'unsigned', is_nullable=true },
+            { name = 'city', type = 'unsigned', is_nullable=true },
+            { name = 'sex', type = 'unsigned', is_nullable=true },
+            { name = 'status', type = 'unsigned', is_nullable=true },
+            { name = 'premium_now', type = 'unsigned', is_nullable=true }
+        })
+        lowcard_schema:create_index('id', { type = 'hash', parts = { 'id' } })
+        --lowcard_schema:create_index('snd', { type = 'tree', parts = { 'country', 'city', 'sex', 'status', 'premium_now' }, unique = false })
     end)
 end
 
@@ -64,6 +78,10 @@ local function print_field_stats(field_name, box, log)
     local null_query = 'SELECT COUNT(*) FROM "accounts" WHERE "'..field_name..'" IS NULL;'
     local null_cnt = box.sql.execute(null_query)[1][1];
     log.info('Unique '..field_name..' values count: '..tostring(uniq_cnt)..', null values count: '..tostring(null_cnt))
+    --log.info('Histogram:')
+    --log.info(box.sql.execute(string.format([[
+    --    SELECT %q, COUNT(*) FROM "accounts" GROUP BY %q ORDER BY COUNT(*) DESC;
+    --]], field_name, field_name)))
 end
 
 local function print_stats(box, log)
@@ -86,6 +104,10 @@ local function print_stats(box, log)
     log.info('Sample:')
     log.info(box.space.interests.index.primary:random())
     log.info('Unique interests count: '..tostring(box.sql.execute('SELECT COUNT(DISTINCT "interest_id") FROM "interests";')[1][1]))
+    log.info('Histogram:')
+    log.info(box.sql.execute(string.format([[
+        SELECT %q, COUNT(*) FROM "interests" GROUP BY %q ORDER BY COUNT(*) DESC;
+    ]], 'interest_id', 'interest_id')))
 
     log.info('Likes inserted '..tostring(box.space.likes:count()))
     log.info('Sample:')

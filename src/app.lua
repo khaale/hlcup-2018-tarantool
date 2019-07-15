@@ -9,6 +9,16 @@ local fiber = require('fiber')
 --local bit32 = require('bit32')
 --local digest = require('digest')
 
+
+log.info("No interests and new likes")
+
+local bitindex = require('bitindex')
+local likes_index = bitindex.create()
+local account_index = {}
+local indexes = {
+    likes_index = likes_index
+}
+
 local refdata = require('refdata')
 local refs = refdata.new()
 
@@ -109,12 +119,15 @@ for _, account_file in ipairs(account_files) do
         end
 
         if (account_js['likes'] ~= nil) then
+            local like_ids = {}
             for _,like in ipairs(account_js['likes']) do
-                box.space.likes:upsert(
-                    {account[1], like['id']},
-                    {{'=', 2, like['id']}}
-                )
+                table.insert(like_ids, like['id'])
+                --box.space.likes:upsert(
+                --    {account[1], like['id']},
+                --   {{'=', 2, like['id']}}
+                --)
             end
+            likes_index:add_values(account[1], like_ids)
         end
     end
 end
@@ -128,6 +141,64 @@ log.info(box.info.memory())
 
 -- make snapshot for debug purposes
 -- box.snapshot()
+
+-- -- interests stats
+-- log.info(box.sql.execute([[
+--     SELECT COUNT(*) FROM "interests" GROUP BY "account_id" ORDER BY COUNT(*) DESC LIMIT 10;
+-- ]]))
+-- log.info(box.sql.execute([[
+--     SELECT * FROM "interests" WHERE "account_id" IN (
+--         SELECT "account_id" FROM "interests" GROUP BY "account_id" ORDER BY COUNT(*) DESC LIMIT 1);
+-- ]]))
+-- -- likes stats
+-- log.info(box.sql.execute([[
+--     SELECT COUNT(*) FROM "likes" GROUP BY "liker_id" ORDER BY COUNT(*) DESC LIMIT 10;
+-- ]]))
+-- log.info(box.sql.execute([[
+--     SELECT * FROM "likes" WHERE "liker_id" IN (
+--         SELECT "liker_id" FROM "likes" GROUP BY "liker_id" ORDER BY COUNT(*) DESC LIMIT 1);
+-- ]]))
+-- log.info(box.sql.execute([[
+--     SELECT COUNT(*) FROM "likes" GROUP BY "likee_id" ORDER BY COUNT(*) DESC LIMIT 10;
+-- ]]))
+-- log.info(box.sql.execute([[
+--     SELECT * FROM "likes" WHERE "likee_id" IN (
+--         SELECT "likee_id" FROM "likes" GROUP BY "likee_id" ORDER BY COUNT(*) DESC LIMIT 1);
+-- ]]))
+
+
+log.info('creating lowcard table..')
+local keys = box.sql.execute([[
+       SELECT "country", "city", "sex", "status", "premium_now"
+       FROM "accounts"
+       GROUP BY "country", "city", "sex", "status", "premium_now";
+]])
+
+for _,key in ipairs(keys) do
+    local ids =  box.sql.execute(string.format([[
+        SELECT "id" FROM "accounts" WHERE "country" = '%s' AND "city" = '%s' AND "sex" = '%s' AND "status" = '%s' AND "premium_now" = '%s' ORDER BY "id" DESC LIMIT 100;
+    ]],
+    key[1],key[2],key[3],key[4],key[5]
+    ))
+    local record = { 0 }
+    for _,v in ipairs(key) do
+    --    if (v == msgpack.NULL) then 
+    --         table.insert(record, 0)
+    --    else
+             table.insert(record, v)
+    --    end
+    end
+    for _, v in ipairs(ids) do
+        record[1] = v[1]
+        --log.info(record)
+        box.space.lowcard:insert(record)
+    end
+end
+log.info(string.format(
+    'created lowcard table. Keys count: %d, rows count: %d',
+    #keys,
+    box.space.lowcard:count()))
+--box.space.lowcard:create_index('snd', { type = 'tree', parts = { 'country', 'city', 'sex', 'status', 'premium_now' }, unique = false })
 
 refs:build_lookups()
 
@@ -152,7 +223,7 @@ end
 
 local httpd = require('http.server').new(nil, 80, { log_requests=false })
 
-local get_account_filter_handler = require('handle_get_accounts_filter').new(refs, box, log);
+local get_account_filter_handler = require('handle_get_accounts_filter').new(refs, box, indexes, log);
 httpd:route({ path = '/accounts/filter', method = 'GET' }, function(req) return get_account_filter_handler:handle(req) end)
 
 httpd:route({ path = '/accounts/group', method = 'GET' }, dummy_groups_handler)
@@ -176,8 +247,17 @@ local function warmup_http()
     local resp = http_client:request('GET','http://0.0.0.0/accounts/filter/?limit=5')
     log.info(resp)
 end
-
 fiber.create(warmup_http)
+
+
+local function print_stats()
+
+    while(true) do
+        fiber.sleep(5)
+        log.info(box.info.memory())
+    end
+end
+--fiber.create(print_stats)
 
 log.info('Starting http server..')
 httpd:start()

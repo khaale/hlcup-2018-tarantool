@@ -17,7 +17,13 @@ RUN apk add --no-cache --virtual .build-deps \
 
 RUN luarocks install bit32
 
+COPY src_libroaring/ /usr/src_libroaring/
+RUN (cd /usr/src_libroaring/ && gcc -shared -o /usr/lib/libroaring.so -fPIC roaring.c)
+
+
 COPY src/ /opt/tarantool/
+
+
 
 EXPOSE 80
 

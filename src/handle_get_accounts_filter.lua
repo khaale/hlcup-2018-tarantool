@@ -1,5 +1,6 @@
 local msgpack = require('msgpack')
 local json = require('json')
+local os = require('os')
 
 local pred_map = {}
 pred_map['eq'] = '='
@@ -45,25 +46,78 @@ local function get_items_list(self, item_name, val, quote)
     return string.sub(result, 2), cnt
 end
 
+local function join(items, quote)
+    local result = ''
+    for _,item in ipairs(items) do
+        result = result..', '..quote..tostring(item)..quote
+    end
+    return string.sub(result, 2)
+end
 
-local function build_accounts_query(self, params, limit)
+local function split(self, item_name, val)
+    local result = {}
+    for word in string.gmatch(val, '[^,]+') do
+        local key = word
+        if (self._refs:contains(item_name)) then
+            key = self._refs:get_value(item_name, word)
+        end
+        table.insert(result, key)
+    end
+
+    return result
+end
+
+local function execute_account_likes_query(self, val, limit)
+    local values = split(self, 'like', val)
+    return self._indexes.likes_index:search_contains_all(values, tonumber(limit))
+end
+
+local lowcard_cols = revert_ipairs({ "country", "city", "sex", "status", "premium_now" })
+local function is_lowcard(params)
+    if (#params == 0) then return false end
+
+    for col,_ in pairs(params) do
+        if (lowcard_cols[col] ~= nil) then
+            return false
+        end
+    end
+    return true
+end
+
+local function build_column_clause(params)
+    local columns_clause = '"id", "email"'
+    for col,p in pairs(params) do
+        if (col == 'premium') then
+            columns_clause = columns_clause..', "premium_start", "premium_finish"'
+        elseif (col ~= 'likes' and col ~= 'interests') then
+            columns_clause = columns_clause..', "'..col..'"'
+        end
+    end
+    return columns_clause
+end
+
+local function build_filter_clause(self, params)
     local filter_clause = ''
-    local columns_clause = ''
 
     for col,p in pairs(params) do
         local pred = p[1]
         local val = p[2]
 
         if (col == 'likes') then
+            local ids = execute_account_likes_query(self, val, 100)
+            local ids_string = join(ids, '')
+            filter_clause = filter_clause..string.format(' AND "id" in (%s)', ids_string)
+            --[[
             local item_list, item_count = get_items_list(self, 'like', val, '')
-
             local fc = string.format(
                     ' AND %d = (SELECT COUNT(DISTINCT "likee_id") FROM "likes" WHERE "accounts"."id" = "liker_id" and "likee_id" IN (%s) LIMIT 1)',
                     item_count,
                     item_list
                     )
             filter_clause = filter_clause..fc
+            ]]
         elseif (col == 'interests') then
+            --[[
             local item_list, item_count = get_items_list(self, 'interest', val, '')
 
             local fc
@@ -80,13 +134,8 @@ local function build_accounts_query(self, params, limit)
                     )
             end
             filter_clause = filter_clause..fc
+            ]]
         else
-            if (col == 'premium') then
-                columns_clause = columns_clause..', "premium_start", "premium_finish"'
-            elseif (col ~= 'id' or col ~= 'email') then
-                columns_clause = columns_clause..', "'..col..'"'
-            end
-
             if (col == 'birth' and pred == 'year') then
                 filter_clause = string.format([[%s AND "birth_year" = '%s' ]], filter_clause, val)
             elseif (col == 'phone' and pred == 'code') then
@@ -122,13 +171,31 @@ local function build_accounts_query(self, params, limit)
         filter_clause = "WHERE "..string.sub(filter_clause, 5)
     end
 
+    return filter_clause
+end
 
-    return string.format([[SELECT
-        "id", "email" %s
+local function build_lowcard_filter_clause(self, params)
+    local filter = ''
+    for 
+end
+
+local function execute_accounts_query(self, params, limit)
+    local columns_clause = build_column_clause(params)
+    local filter_clause
+    if (is_lowcard(params)) then
+        filter_clause = build_lowcard_filter_clause(self, params)
+    else
+        filter_clause = build_filter_clause(self, params)
+    end
+
+    local query = string.format([[SELECT
+        %s
     FROM "accounts"
     %s
     ORDER BY "id" DESC
     LIMIT %d;]], columns_clause, filter_clause, limit)
+    self._log.info(query)
+    return self._box.sql.execute(query);
 end
 
 local function make_accounts_response(self, results, params)
@@ -186,6 +253,8 @@ local function try_parse_req_params(req_params)
 end
 
 local function accounts_filter_handler(self, req)
+    --local start_time = os.clock()
+
     local req_params = req:query_param(nil)
     local status, params = try_parse_req_params(req_params)
     if (not status) then
@@ -201,14 +270,12 @@ local function accounts_filter_handler(self, req)
         return resp
     end
 
-    local query = build_accounts_query(self, params, limit)
-    --self._log.info(query)
-    --self._log.info(self._box.sql.execute('EXPLAIN '..query))
-
-    local result = self._box.sql.execute(query)
-    --log.info(result)
+    local result = execute_accounts_query(self, params, limit)
 
     local response = make_accounts_response(self, result, params)
+
+    --local finish_time = os.clock()
+    --self._log.info('Time elapsed: '..tostring(finish_time - start_time)..' seconds')
 
     local resp = req:render({text = response })
     resp.status = 200
@@ -216,11 +283,12 @@ local function accounts_filter_handler(self, req)
 end
 
 return {
-    new = function(refs, box, log)
+    new = function(refs, box, indexes, log)
         local handler = {
             _refs = refs,
             _box = box,
             _log = log,
+            _indexes = indexes,
             handle = accounts_filter_handler
         }
         return handler
